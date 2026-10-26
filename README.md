@@ -1,5 +1,7 @@
 # Customer Data Integration Pipeline
 
+[![ci](https://github.com/ParthaAnil/customer-data-pipeline/actions/workflows/tests.yml/badge.svg)](https://github.com/ParthaAnil/customer-data-pipeline/actions/workflows/tests.yml)
+
 Consolidates customer records from a CRM export (CSV) and a billing export (XML) into a single de-duplicated PostgreSQL database and serves them through a REST API.
 
 The two systems disagree in the usual ways: different field layouts, phone and date formats, casing, and the same person registered under different emails. The pipeline normalises each record, rejects invalid ones with reasons, matches duplicates across sources, and keeps one record per customer with links back to every source record it came from.

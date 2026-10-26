@@ -36,7 +36,7 @@ spec:
         runAsUser: 10001
       containers:
         - name: api
-          image: ghcr.io/YOUR_GITHUB_USER/customer-pipeline:1.2.0
+          image: ghcr.io/parthaanil/customer-pipeline:1.2.0
           ports: [{containerPort: 8000}]
           envFrom:
             - secretRef: {name: customer-pipeline}
@@ -91,7 +91,7 @@ spec:
             runAsUser: 10001
           containers:
             - name: pipeline
-              image: ghcr.io/YOUR_GITHUB_USER/customer-pipeline:1.2.0
+              image: ghcr.io/parthaanil/customer-pipeline:1.2.0
               command: ["customer-pipeline", "run"]
               envFrom:
                 - secretRef: {name: customer-pipeline}
