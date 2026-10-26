@@ -1,0 +1,62 @@
+# Prometheus alert rules for the metrics exposed at /metrics.
+# Load with:  rule_files: ["alerts.yml"]  in prometheus.yml
+#
+# SLOs these alerts protect (see docs/PRODUCTION_READINESS.md):
+#   availability  99.5% of API requests succeed (non-5xx) over 30 days
+#                 -> error budget: 0.5% of requests, about 3.6 hours of full outage a month
+#   latency       95% of API requests finish in under 300 ms
+#   freshness     the nightly pipeline succeeds at least once every 26 hours
+
+groups:
+  - name: customer-api
+    rules:
+      - alert: ApiHighErrorRate
+        # Burning the 0.5% error budget 14x faster than allowed = budget gone in ~2 days.
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m]))
+            / sum(rate(http_requests_total[5m])) > 0.07
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "API 5xx rate above 7% for 5 minutes"
+
+      - alert: ApiSlowP95
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(http_request_duration_seconds_bucket[5m]))) > 0.3
+        for: 10m
+        labels: {severity: ticket}
+        annotations:
+          summary: "p95 latency above 300 ms for 10 minutes"
+
+      - alert: ApiDown
+        expr: up{job="customer-api"} == 0
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: "Prometheus cannot scrape the API"
+
+  - name: customer-pipeline
+    # These read gauges the API computes from the pipeline_runs table, so they
+    # also cover runs done by the CronJob. max() because every API replica
+    # reports the same value.
+    rules:
+      - alert: PipelineLastRunFailed
+        expr: max(pipeline_last_run_failed) == 1
+        labels: {severity: ticket}
+        annotations:
+          summary: "The latest pipeline run failed; check GET /pipeline/runs for the error"
+
+      - alert: PipelineDataStale
+        # No successful run in 26 h: the nightly CronJob missed a night.
+        expr: time() - max(pipeline_last_success_timestamp_seconds) > 26 * 3600
+        labels: {severity: ticket}
+        annotations:
+          summary: "No successful pipeline run in 26 hours"
+
+      - alert: PipelineRejectRateHigh
+        # A sudden jump in rejects usually means a source changed its export format.
+        expr: max(pipeline_last_run_reject_ratio) > 0.25
+        labels: {severity: ticket}
+        annotations:
+          summary: "More than 25% of records rejected in the latest run"

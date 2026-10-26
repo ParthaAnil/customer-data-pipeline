@@ -1,0 +1,108 @@
+# API Deployment + Service, and the nightly pipeline CronJob.
+#
+# Create the secret first:
+#   kubectl create secret generic customer-pipeline \
+#     --from-literal=DATABASE_URL='postgresql+psycopg://user:pass@db-host:5432/customers?sslmode=require' \
+#     --from-literal=API_KEY="$(python -c 'import secrets;print(secrets.token_urlsafe(32))')"
+#   kubectl apply -f k8s/customer-pipeline.yaml
+#
+# Roll back:  kubectl rollout undo deployment/customer-api
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: customer-api
+  labels: {app: customer-api}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: customer-api}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels: {app: customer-api}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: /metrics
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: api
+          image: ghcr.io/YOUR_GITHUB_USER/customer-pipeline:1.2.0
+          ports: [{containerPort: 8000}]
+          envFrom:
+            - secretRef: {name: customer-pipeline}
+          env:
+            - {name: LOG_FORMAT, value: json}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+          livenessProbe:
+            httpGet: {path: /health/live, port: 8000}
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: {path: /health/ready, port: 8000}
+            periodSeconds: 5
+            failureThreshold: 2
+      volumes:
+        - {name: tmp, emptyDir: {}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: customer-api
+spec:
+  selector: {app: customer-api}
+  ports: [{port: 80, targetPort: 8000}]
+---
+# Nightly at 02:30 IST (21:00 UTC).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: customer-pipeline-nightly
+spec:
+  schedule: "0 21 * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 2              # runs are idempotent, so retries are safe
+      activeDeadlineSeconds: 1800
+      template:
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+          containers:
+            - name: pipeline
+              image: ghcr.io/YOUR_GITHUB_USER/customer-pipeline:1.2.0
+              command: ["customer-pipeline", "run"]
+              envFrom:
+                - secretRef: {name: customer-pipeline}
+              env:
+                - {name: LOG_FORMAT, value: json}
+              resources:
+                requests: {cpu: 100m, memory: 128Mi}
+                limits: {memory: 512Mi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+              volumeMounts: [{name: tmp, mountPath: /tmp}]
+          volumes:
+            - {name: tmp, emptyDir: {}}

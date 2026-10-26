@@ -1,0 +1,53 @@
+# PostgreSQL + API.
+#
+#   cp .env.example .env            # then edit the secrets
+#   docker compose up --build -d
+#   docker compose run --rm pipeline          # run the pipeline once
+#   curl -H "X-API-Key: $API_KEY" localhost:8000/customers
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?set in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # No published port: reachable only from containers on this network.
+
+  api:
+    build: .
+    environment: &app-env
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      API_KEY: ${API_KEY:?set in .env}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"   # local only; a TLS proxy fronts real traffic
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+
+  # One-shot job: docker compose run --rm pipeline
+  pipeline:
+    build: .
+    command: ["customer-pipeline", "run"]
+    environment: *app-env
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles: ["job"]
+    read_only: true
+    tmpfs: [/tmp]
+
+volumes:
+  pgdata:
